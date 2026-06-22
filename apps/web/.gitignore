@@ -1,0 +1,2 @@
+# router プラグインが生成する route tree（ビルド/dev 時に再生成される）
+src/routeTree.gen.ts

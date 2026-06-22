@@ -43,7 +43,7 @@
 
 ## データ保護
 
-- パスワードは **argon2 もしくは bcrypt** でハッシュ化して保存する（平文・可逆暗号は禁止）。
+- パスワードは **scrypt（Node 標準 `node:crypto`）** でハッシュ化して保存する（平文・可逆暗号は禁止）。salt を `randomBytes(16)` で生成し `salt(hex):hash(hex)` 形式で保存、検証は `timingSafeEqual`。ネイティブ依存を避ける選択。代替候補: argon2id。実装は `apps/api/src/lib/password.ts`。
 - `SESSION_SECRET` などの秘匿情報は環境変数で管理し、リポジトリにコミットしない（[`../.claude/rules/git.md`](../.claude/rules/git.md)）。
 - 秘匿値をフロント（`VITE_` 変数）に渡さない。
 

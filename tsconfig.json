@@ -1,0 +1,5 @@
+{
+  "comment": "ルートはエディタ用の最小設定。型チェックは各パッケージの tsconfig で行う（turbo run typecheck）。",
+  "files": [],
+  "include": []
+}
