@@ -59,3 +59,15 @@ pnpm db:down                  # DB コンテナ停止
 
 - 仕様書一覧: [docs/README.md](docs/README.md)
 - 開発ルール: `.claude/rules/`
+
+## AI エージェント向けルール
+
+開発ルールの正本は [`.claude/rules/`](.claude/rules/) です。Claude Code は [`CLAUDE.md`](CLAUDE.md) から、Codex はリポジトリ階層の [`AGENTS.md`](AGENTS.md) から同じルールを参照します。ルール本文は複製せず、変更対象に最も近い `AGENTS.md` が指定する追加ルールも適用します。
+
+| 対象 | Codex 向け指示ファイル | 追加で参照するルール |
+|---|---|---|
+| リポジトリ全体 | [`AGENTS.md`](AGENTS.md) | 共通ルール |
+| `apps/web/**` | [`apps/web/AGENTS.md`](apps/web/AGENTS.md) | React + Vite + TanStack |
+| `apps/api/**` | [`apps/api/AGENTS.md`](apps/api/AGENTS.md) | Hono API（+ DB） |
+| `packages/db/**` | [`packages/db/AGENTS.md`](packages/db/AGENTS.md) | Drizzle ORM / PostgreSQL |
+| `packages/shared/**` | [`packages/shared/AGENTS.md`](packages/shared/AGENTS.md) | 共有 Zod スキーマ |
