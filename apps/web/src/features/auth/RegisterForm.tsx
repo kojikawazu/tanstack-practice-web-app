@@ -6,12 +6,19 @@ import { ApiError } from '@/lib/api-client';
 import { fieldErrorMessages } from '@/lib/form';
 import { useRegister } from './api';
 
+/**
+ * 新規登録フォーム。構造は LoginForm と同じで、スキーマとフィールドだけが違う。
+ * 登録が成功するとサーバーがセッション Cookie を発行するため、
+ * 改めてログインさせずそのまま一覧へ進める。
+ */
 export function RegisterForm() {
   const register = useRegister();
   const navigate = useNavigate();
 
   const form = useForm({
     defaultValues: { email: '', password: '', name: '' },
+    // パスワードの最小長などの規則は registerSchema（@repo/shared）が持つ。
+    // 画面のラベル（「8文字以上」）とスキーマがずれないよう、規則の正本は1箇所にする。
     validators: { onChange: registerSchema },
     onSubmit: async ({ value }) => {
       await register.mutateAsync(value);

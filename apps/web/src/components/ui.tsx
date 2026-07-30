@@ -1,6 +1,13 @@
 import type { ButtonHTMLAttributes, InputHTMLAttributes, SelectHTMLAttributes } from 'react';
 
-// UI 部品ライブラリは使わず、Tailwind ユーティリティで最小限の自前部品を組む（docs/03 方針）。
+/**
+ * UI 部品ライブラリは使わず、Tailwind ユーティリティで最小限の自前部品を組む（docs/03 方針）。
+ *
+ * 各部品が `...props` を素通しし、className を結合しているのが要点。
+ * こうすると <TextInput type="date" /> のように標準の HTML 属性がそのまま使え、
+ * 呼び出し側で個別に見た目を足すこともできる（TaskTable の Button など）。
+ * 「繰り返すクラスの組み合わせを部品へ切り出す」という frontend.md の方針の実装。
+ */
 
 export function Button({ className = '', ...props }: ButtonHTMLAttributes<HTMLButtonElement>) {
   return (
