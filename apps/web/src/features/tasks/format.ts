@@ -1,5 +1,12 @@
 import type { TaskPriority, TaskStatus } from '@repo/shared';
 
+/**
+ * 表示用の変換をまとめたモジュール。コンポーネントから整形処理を追い出すことで、
+ * DOM を用意しなくてもテストできる（format.test.ts）。
+ *
+ * Record<TaskStatus, string> と型付けしておくと、@repo/shared に
+ * ステータスを追加したときにラベルの書き漏れが型エラーとして検出される。
+ */
 export const STATUS_LABEL: Record<TaskStatus, string> = {
   todo: '未着手',
   in_progress: '進行中',
@@ -21,7 +28,14 @@ export function formatDate(iso: string | null): string {
   });
 }
 
-/** ISO 文字列 → <input type="date"> の値（YYYY-MM-DD） */
+/**
+ * ISO 文字列 → <input type="date"> の値（YYYY-MM-DD）
+ *
+ * 以下2つは API 契約（ISO 8601）と <input type="date">（YYYY-MM-DD）の
+ * 橋渡しで、フォームの入口と出口で対になっている。
+ * どちらも UTC 基準で扱う（toISOString / 末尾 Z）。ローカル時刻を混ぜると
+ * 時差の影響で日付が1日ずれるため、変換の基準を片方に統一している。
+ */
 export function toDateInputValue(iso: string | null): string {
   if (!iso) return '';
   return new Date(iso).toISOString().slice(0, 10);

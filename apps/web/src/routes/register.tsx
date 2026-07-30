@@ -3,6 +3,7 @@ import { meQueryOptions } from '@/features/auth/api';
 import { RegisterForm } from '@/features/auth/RegisterForm';
 
 export const Route = createFileRoute('/register')({
+  // login.tsx と同じく、ログイン済みなら登録画面は見せない。
   beforeLoad: async ({ context }) => {
     const user = await context.queryClient.ensureQueryData(meQueryOptions());
     if (user) throw redirect({ to: '/tasks' });

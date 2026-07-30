@@ -6,6 +6,16 @@ import { useUpdateTask } from './api';
 import { dateInputToIso, PRIORITY_LABEL, STATUS_LABEL, toDateInputValue } from './format';
 import { taskFormSchema } from './task-form-schema';
 
+/**
+ * タスク編集フォーム。作成フォームとの違いは2点。
+ *
+ * 1. defaultValues に既存タスクの値を詰める（作成は空）。
+ *    API の ISO 文字列を toDateInputValue で 'YYYY-MM-DD' に直してから渡し、
+ *    送信時に dateInputToIso で戻す。<input type="date"> の形式に合わせるため。
+ * 2. useUpdateTask に filters を渡していない。この画面は一覧を表示していないので
+ *    一覧キャッシュの楽観的更新は行わず、詳細キャッシュの更新と
+ *    onSettled の invalidate に任せる。
+ */
 export function TaskEditForm({ task, onSaved }: { task: TaskDto; onSaved?: () => void }) {
   const update = useUpdateTask();
   const form = useForm({
@@ -16,6 +26,8 @@ export function TaskEditForm({ task, onSaved }: { task: TaskDto; onSaved?: () =>
       priority: task.priority,
       dueDate: toDateInputValue(task.dueDate),
     },
+    // 作成と同じスキーマを共有する。入力仕様が1箇所に集まるため、
+    // 作成だけ通って編集で弾かれるといった食い違いが起きない。
     validators: { onChange: taskFormSchema },
     onSubmit: async ({ value }) => {
       await update.mutateAsync({

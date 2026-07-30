@@ -13,8 +13,21 @@ import { tasksInfiniteQueryOptions, useDeleteTask, useUpdateTask } from './api';
 import { taskColumns } from './columns';
 
 const SORTABLE = new Set<TaskSortField>(['title', 'dueDate', 'priority', 'createdAt']);
+// 仮想化のため全行を同じ高さに固定する。可変高さも扱えるが、
+// 固定の方が位置計算が単純で、スクロール量の推定もぶれない。
 const ROW_HEIGHT = 48;
 
+/**
+ * タスク一覧テーブル。TanStack の Table / Virtual / Query が交差する中心。
+ *
+ * 役割分担:
+ * - Query (useInfiniteQuery) … サーバーからページ単位でデータを取得する
+ * - Table (useReactTable)    … 列定義・表示列の状態を持つ（見た目は持たない）
+ * - Virtual (useVirtualizer) … 可視範囲の行だけを DOM に描画する
+ *
+ * ソートと絞り込みは**このコンポーネントの状態ではない**。URL（filters）が正で、
+ * ここは受け取って表示し、変更を onFiltersChange で親へ返すだけ。
+ */
 export function TaskTable({
   filters,
   onFiltersChange,
@@ -22,27 +35,57 @@ export function TaskTable({
   filters: TaskFilters;
   onFiltersChange: (f: TaskFilters) => void;
 }) {
+  // ルートの loader と同じ queryOptions を渡すため、ここでは再取得が走らず
+  // 温まったキャッシュをそのまま購読する（キーが一致することが条件）。
   const query = useInfiniteQuery(tasksInfiniteQueryOptions(filters));
+  // filters を渡すと、mutation 側が「今表示しているリスト」のキャッシュを
+  // 特定できるようになり、楽観的更新の対象にできる。
   const update = useUpdateTask(filters);
   const del = useDeleteTask(filters);
 
+  // infinite query のデータは pages（ページの配列）の形で届くため、
+  // テーブルへ渡す前に1本の配列へ平坦化する。
+  // useMemo が必須: 毎回新しい配列を作ると useReactTable の data 参照が変わり、
+  // 不要な再計算を誘発する。
   const rowsData = useMemo(
     () => query.data?.pages.flatMap((p) => p.items) ?? [],
     [query.data],
   );
+  // 表示列の ON/OFF。サーバーと無関係な純粋な UI 状態なので useState でよい。
   const [columnVisibility, setColumnVisibility] = useState<VisibilityState>({});
 
+  /**
+   * TanStack Table は headless（見た目を持たない）。
+   * <table> も CSS も描画せず、列・行・表示状態の計算だけを担う。
+   * 実際のマークアップは下の CSS Grid で自前に組んでいる。
+   *
+   * - state / onColumnVisibilityChange … 表示列を「制御された状態」として外に出す
+   * - getCoreRowModel … 加工なしの基本の行モデル。ソート・フィルタを
+   *   クライアントでやる場合は getSortedRowModel 等を追加する
+   * - manualSorting: true … ソートをテーブル内部で行わない宣言。
+   *   本アプリの並べ替えはサーバー側（filters → query key → API）。
+   *   これを外すとクライアント側でも並べ替えが走り、
+   *   「読み込み済みの一部だけが並び替わる」不整合が起きる。
+   */
   const table = useReactTable({
     data: rowsData,
     columns: taskColumns,
     state: { columnVisibility },
     onColumnVisibilityChange: setColumnVisibility,
     getCoreRowModel: getCoreRowModel(),
-    manualSorting: true, // ソートはサーバ側（filters → query key）
+    manualSorting: true,
   });
 
   const parentRef = useRef<HTMLDivElement>(null);
   const rows = table.getRowModel().rows;
+  /**
+   * TanStack Virtual: 5000 行あっても DOM に置くのは可視範囲ぶんだけにする。
+   * - count … 全行数（実データではなく件数だけを渡す）
+   * - getScrollElement … スクロールを監視する要素
+   * - estimateSize … 各行の高さ。ここでは固定値
+   * - overscan … 可視範囲の外に余分に描画する行数。
+   *   0 にすると高速スクロール時に空白が見えるため、少し多めに確保する
+   */
   const virtualizer = useVirtualizer({
     count: rows.length,
     getScrollElement: () => parentRef.current,
@@ -50,6 +93,13 @@ export function TaskTable({
     overscan: 12,
   });
 
+  /**
+   * 無限スクロール: 末尾 300px まで近づいたら次ページを取りに行く。
+   *
+   * ガードが2つとも要る。hasNextPage が無いと最終ページ以降も要求し続け、
+   * isFetchingNextPage が無いとスクロール中に同じページを何度も並行取得する
+   * （scroll イベントは連続で発火するため）。
+   */
   const onScroll = useCallback(() => {
     const el = parentRef.current;
     if (!el) return;
@@ -59,6 +109,9 @@ export function TaskTable({
     }
   }, [query]);
 
+  // ヘッダークリックの並べ替え。同じ列なら昇順/降順を反転、別列なら昇順から。
+  // ここで状態を持たず onFiltersChange に委ねる点が要で、
+  // 結果は URL 更新 → query key 変化 → サーバーから取り直し、という流れになる。
   function toggleSort(field: TaskSortField) {
     if (filters.sortField === field) {
       onFiltersChange({ ...filters, sortDir: filters.sortDir === 'asc' ? 'desc' : 'asc' });
@@ -67,6 +120,9 @@ export function TaskTable({
     }
   }
 
+  // 表示中の列から Grid の列幅を組み立てる。ヘッダーと各行で同じ値を使うことで、
+  // <table> を使わずに桁を揃えている（headless ゆえに自前で面倒を見る部分）。
+  // 末尾の 200px は列定義に含めていない「操作」列のぶん。
   const visibleColumns = table.getVisibleLeafColumns();
   const gridTemplate =
     visibleColumns
@@ -124,7 +180,13 @@ export function TaskTable({
           <div className="px-3 py-2">操作</div>
         </div>
 
-        {/* 仮想化された行 */}
+        {/*
+          仮想化された行。
+          外側の div に「全行ぶんの高さ」(getTotalSize) を与えてスクロールバーの
+          長さを実際の件数どおりに見せ、内側では可視範囲の行だけを絶対配置する。
+          位置指定に top ではなく transform: translateY を使うのは、
+          レイアウト再計算を避けてスクロール中の描画を軽くするため。
+        */}
         <div style={{ height: `${virtualizer.getTotalSize()}px`, position: 'relative' }}>
           {virtualizer.getVirtualItems().map((vi) => {
             const row = rows[vi.index]!;
@@ -139,6 +201,11 @@ export function TaskTable({
                   gridTemplateColumns: gridTemplate,
                 }}
               >
+                {/*
+                  flexRender は列定義の cell（文字列・関数・コンポーネントの
+                  いずれでもよい）を実際に描画するためのヘルパー。
+                  自分で cell(...) を呼ぶとコンポーネントの場合に壊れる。
+                */}
                 {row.getVisibleCells().map((cell) => (
                   <div key={cell.id} className="truncate px-3">
                     {flexRender(cell.column.columnDef.cell, cell.getContext())}
