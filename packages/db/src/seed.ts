@@ -6,6 +6,17 @@ import { db, queryClient } from './client';
 import { tasks, users } from './schema';
 import type { NewTask } from './types';
 
+/**
+ * 開発用の初期データ投入。
+ *
+ * タスクを 5000 件も作るのは、TanStack Virtual の仮想化と
+ * カーソルページングを実際に体感するため。数十件では
+ * 仮想化してもしなくても見た目が変わらず、学習にならない。
+ *
+ * 先頭で './load-env' を import しているのは、次行以降の
+ * './client' が DATABASE_URL を読むより先に .env をロードするため。
+ */
+
 const DEMO_EMAIL = 'demo@example.com';
 const DEMO_PASSWORD = 'password123';
 const TASK_COUNT = 5000;
@@ -36,6 +47,9 @@ async function main() {
   if (!user) throw new Error('demo user の作成に失敗しました');
   console.log(`demo user: ${DEMO_EMAIL} / ${DEMO_PASSWORD}`);
 
+  // 1000 件ずつに分けて INSERT する。5000 件を1文で投げると
+  // プレースホルダ数が上限に触れたりメモリを圧迫したりするため、
+  // 大量投入は分割するのが定石。
   let inserted = 0;
   for (let start = 0; start < TASK_COUNT; start += CHUNK) {
     const batch: NewTask[] = [];

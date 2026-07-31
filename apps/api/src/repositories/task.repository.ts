@@ -3,6 +3,22 @@ import { db, tasks } from '@repo/db';
 import type { NewTask, Task } from '@repo/db';
 import type { CreateTaskInput, TaskQuery, UpdateTaskInput } from '@repo/shared';
 
+/**
+ * タスクのデータアクセス層。このファイルの主題はキーセットページング。
+ *
+ * よくある OFFSET/LIMIT 方式には2つの弱点がある。
+ * 1. OFFSET が大きいほど遅い。DB は読み飛ばす行も一度は走査するため。
+ * 2. ページ送りの最中に行が挿入・削除されると、境界の行が重複したり
+ *    飛ばされたりする（OFFSET は「位置」であって「どの行か」ではないため）。
+ *
+ * キーセット方式は「前ページの最後の行の値」を起点に `WHERE 値 > 起点` で
+ * 続きを取る。常に索引を使って必要な範囲だけを読むので深いページでも
+ * 速度が落ちず、途中で行が増減しても境界がずれない。
+ */
+
+// ソート可能な列のホワイトリスト。クライアントから来た文字列を
+// そのまま列名に使わず、ここに定義した列オブジェクトへ変換する
+// （任意の列名を渡されるのを防ぐ）。
 const sortColumns = {
   createdAt: tasks.createdAt,
   dueDate: tasks.dueDate,
@@ -10,6 +26,12 @@ const sortColumns = {
   title: tasks.title,
 } as const;
 
+/**
+ * カーソルの中身。v はソートキーの値、id はタイブレーク用。
+ * この2つを組にすることで「どの行の次から」を一意に表せる。
+ * base64url にするのは中身を隠すためではなく（デコードすれば読める）、
+ * URL に安全に載せられる形にするため。
+ */
 interface Cursor {
   v: string | null;
   id: string;
@@ -19,6 +41,8 @@ function encodeCursor(c: Cursor): string {
   return Buffer.from(JSON.stringify(c)).toString('base64url');
 }
 
+// カーソルはクライアントから届く（＝改変されうる）値なので、
+// 壊れていても例外にせず null を返し、先頭から取り直す扱いにする。
 function decodeCursor(s: string): Cursor | null {
   try {
     const parsed = JSON.parse(Buffer.from(s, 'base64url').toString()) as Cursor;
@@ -43,7 +67,15 @@ function cursorValue(field: TaskQuery['sortField'], row: Task): string | null {
   }
 }
 
-/** ORDER BY 式（dueDate は NULLS LAST 固定 + id でタイブレーク） */
+/**
+ * ORDER BY 式（dueDate は NULLS LAST 固定 + id でタイブレーク）
+ *
+ * 必ず id を第2キーに添えるのがキーセット方式の前提条件。
+ * 例えば priority でソートすると 'high' の行が大量に並ぶが、
+ * その中の順序が不定だと DB の気分次第で並びが変わり、
+ * ページを跨いだ瞬間に同じ行が二度出たり消えたりする。
+ * id で完全に順序を確定させることで、それを防いでいる。
+ */
 function buildOrderBy(field: TaskQuery['sortField'], dir: 'asc' | 'desc'): SQL[] {
   const col = sortColumns[field];
   const idTie = dir === 'asc' ? asc(tasks.id) : desc(tasks.id);
@@ -54,7 +86,13 @@ function buildOrderBy(field: TaskQuery['sortField'], dir: 'asc' | 'desc'): SQL[]
   return [dir === 'asc' ? asc(col) : desc(col), idTie];
 }
 
-/** キーセット(カーソル)ページングの WHERE 述語。(sortValue, id) の複合キーで境界を表現する。 */
+/**
+ * キーセット(カーソル)ページングの WHERE 述語。(sortValue, id) の複合キーで境界を表現する。
+ *
+ * 基本形は「ソート値が起点より先」OR「ソート値が同じで id が起点より後」。
+ * 前半で次の値へ進み、後半で同値グループの続きを拾う。
+ * ソート方向によって比較演算子が > と < で入れ替わる（cmp）。
+ */
 function keysetPredicate(
   field: TaskQuery['sortField'],
   dir: 'asc' | 'desc',
@@ -64,7 +102,13 @@ function keysetPredicate(
   const cmp = dir === 'asc' ? gt : lt;
   const idCmpAfterTie = dir === 'asc' ? gt(tasks.id, cursor.id) : lt(tasks.id, cursor.id);
 
-  // dueDate は nullable + NULLS LAST のため特別扱い
+  /**
+   * dueDate は nullable + NULLS LAST のため特別扱い。
+   * SQL では NULL との比較（NULL > 値）が真にも偽にもならず UNKNOWN になるため、
+   * 素朴な不等号では NULL 行を正しく跨げない。
+   * 「期限あり」の領域を全て出し切ってから「期限なし」の領域へ移る、
+   * という並び順を、条件式で明示的に表現している。
+   */
   if (field === 'dueDate') {
     if (cursor.v === null) {
       // 既に null 領域。null 同士は id 順で続きを取る
@@ -89,6 +133,9 @@ export const taskRepository = {
     userId: string,
     q: TaskQuery,
   ): Promise<{ items: Task[]; nextCursor: string | null }> {
+    // 所有者スコープは常に最初の条件。他の絞り込みは任意だが、これは必須。
+    // schema.ts の複合インデックスも (userId, ソートキー) の順で張ってあり、
+    // この WHERE + ORDER BY の組み合わせが索引だけで解決できるようにしている。
     const conditions: SQL[] = [eq(tasks.userId, userId)];
     if (q.status) conditions.push(eq(tasks.status, q.status));
     if (q.priority) conditions.push(eq(tasks.priority, q.priority));
@@ -104,10 +151,15 @@ export const taskRepository = {
       .from(tasks)
       .where(and(...conditions))
       .orderBy(...buildOrderBy(q.sortField, q.sortDir))
+      // limit + 1 件取るのが定石。1件多く取れたら「次がある」と判断でき、
+      // 総件数を数える COUNT クエリを別に投げずに済む。
       .limit(q.limit + 1);
 
     let nextCursor: string | null = null;
     if (rows.length > q.limit) {
+      // 余分に取れた場合のみ次カーソルを作る。返すのは limit 件までに切り詰め、
+      // カーソルは「返した最後の行」から作る（1件多い方の行ではない）。
+      // ここを間違えると1件飛ばしになる。
       const last = rows[q.limit - 1]!;
       rows.length = q.limit;
       nextCursor = encodeCursor({ v: cursorValue(q.sortField, last), id: last.id });
